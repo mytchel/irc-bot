@@ -1,17 +1,15 @@
--module(main).
+-module(bot).
 -author('Mytchel Hammond <mytch@lackname.org>').
 
--export([start/3]).
+-export([start/4]).
 
--define(NICK, "laind").
-
-start(Address, Port, Channel) ->
+start(Address, Port, Nick, Channel) ->
 	{ok, Sock} = gen_tcp:connect(Address, Port, 
 	                            [binary, {packet, 0}, {active, false}]),
 	ok = gen_tcp:send(Sock, 
-	       lists:concat(["USER ", ?NICK, " ", ?NICK, " ", ?NICK, " :A Bot\r\n"])),
+	       lists:concat(["USER ", Nick, " ", Nick, " ", Nick, " :A Bot\r\n"])),
 	ok = gen_tcp:send(Sock, 
-	       lists:concat(["NICK ", ?NICK, "\r\n"])),
+	       lists:concat(["NICK ", Nick, "\r\n"])),
 	ok = gen_tcp:send(Sock, 
 	       lists:concat(["JOIN ", Channel, "\r\n"])),
 	loop(Sock).
