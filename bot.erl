@@ -1,9 +1,9 @@
 -module(bot).
 -author('Mytchel Hammond <mytch@lackname.org>').
 
--export([start/4]).
+-export([run/4]).
 
-start(Address, Port, Nick, Channel) ->
+run(Address, Port, Nick, Channel) ->
 	{ok, Sock} = gen_tcp:connect(Address, Port, 
 	                            [binary, {packet, 0}, {active, false}]),
 	ok = gen_tcp:send(Sock, 
@@ -12,6 +12,7 @@ start(Address, Port, Nick, Channel) ->
 	       lists:concat(["NICK ", Nick, "\r\n"])),
 	ok = gen_tcp:send(Sock, 
 	       lists:concat(["JOIN ", Channel, "\r\n"])),
+	ets:new(tells, [bag, named_table]),
 	loop(Sock).
 
 loop(Sock) ->
@@ -24,40 +25,69 @@ loop(Sock) ->
 			{error, Reason}
 	end. 
 
+getNick(Full) ->
+	lists:nth(2, re:split(Full, ":|!", [{return, list}])).
+
 respond(Sock, ["PING", Message]) ->
 	gen_tcp:send(Sock, lists:concat(["PONG ", Message]));
 
-respond(Sock,  [From, "PRIVMSG", Channel, ":" ++ MessageHead | MessageTail]) ->
-	User = lists:nth(2, re:split(From, ":|!", [{return, list}])),
-	Resp = case MessageHead of
+respond(Sock,  [From, "PRIVMSG", Chan, ":" ++ MessageHead | MessageTail]) ->
+	User = getNick(From),
+	case MessageHead of
 		"." ++ Cmd -> 
-			command(User, Cmd, MessageTail);
+			command(Sock, Chan, User, Cmd, MessageTail);
 		_ -> 
 			Message = string:join([MessageHead | MessageTail], " "),
-			answer(User, Message)
-	end,
-	case Resp of 
-		nothing -> ok;
-		_ -> gen_tcp:send(Sock, lists:concat(["PRIVMSG ", Channel, " :", Resp, "\r\n"]))
+			answer(Sock, Chan, User, Message)
 	end;
+	
+respond(Sock,  [From, "JOIN", ":" ++ Chan]) ->
+	User = getNick(From),
+	sendTells(Sock, Chan, User, ets:lookup(tells, User));
 
 respond(_, _) ->
 	ok.
 
-answer(_, _) ->
-	nothing.
 
-command(_, "help", ["tell" | _]) ->
-	io_lib:format("usage: .tell [nick] a message.", []);
+answer(Sock, Chan, User, _) ->
+	ok = sendTells(Sock, Chan, User, ets:lookup(tells, User)),
+	ok.
 
-command(_, "help", []) ->
-	io_lib:format("I know how to: tell, and not much else", []);
 
-command(User, "tell", [To | SplitMessage]) ->
+
+sendTells(_, _, _, []) ->
+	ok;
+	
+sendTells(Sock, Chan, User, [{To, From, Message} |T]) ->
+	Resp = io_lib:format("~s: ~s told me to say: ~s", 
+	              [To, From, Message]),
+	ets:delete_object(tells, {To, From, Message}),
+	gen_tcp:send(Sock, 
+		lists:concat(["PRIVMSG ", Chan, " :", Resp, "\r\n"])),
+	sendTells(Sock, Chan, User, T).
+	
+
+
+command(Sock, Chan, _, "help", ["tell" | _]) ->
+	gen_tcp:send(Sock, 
+		lists:concat(["PRIVMSG ", Chan, " :usage: .tell [nick] a message\r\n"]));
+
+command(Sock, Chan, _, "help", []) ->
+	gen_tcp:send(Sock, 
+		lists:concat(["PRIVMSG ", Chan, " :I know how to: tell, and not much else.\r\n"]));
+
+
+
+command(Sock, Chan, User, "tell", [To | SplitMessage]) ->
 	Message = string:join(SplitMessage, " "),
-	io_lib:format("Should tell ~p ~p from ~p",
-	              [To, Message, User]);
+	ets:insert(tells, {To, User, Message}),
+	Resp = io_lib:format("~s: I will tell ~s that next time I see them.",
+	                     [User, To]),
+	gen_tcp:send(Sock, 
+		lists:concat(["PRIVMSG ", Chan, " :", Resp, "\r\n"]));
 
-command(User, Cmd, _) ->
-	io_lib:format("I do not know what ~p means ~p", 
-	              [Cmd, User]).
+command(Sock, Chan, User, Cmd, _) ->
+	Resp = io_lib:format("I do not know what ~p means ~p", 
+	              [Cmd, User]),
+	gen_tcp:send(Sock, 
+		lists:concat(["PRIVMSG ", Chan, " :", Resp, "\r\n"])).
